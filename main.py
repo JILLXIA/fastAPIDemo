@@ -1,29 +1,33 @@
-from fastapi import FastAPI, UploadFile, File
-from langchain_community.document_loaders import WeatherDataLoader
+from fastapi import FastAPI
+from tools.weather import get_weather_by_prompt
+from tools.geocoding import get_lat_lon
+
 app = FastAPI()
 
-# Get an [API key](https://home.openweathermap.org/api_keys) first.
-# Set API key either by passing it in to constructor directly
-# or by setting the environment variable "OPENWEATHERMAP_API_KEY".
+@app.get("/plan")
+async def get_plan(
+    prompt: str = "What’s weather like in San Jose, CA next weekend?",
+    city_name: str = "San Jose, CA"
+):
+    """
+    Creates a weekend plan.
+    It gets the weather for the given prompt and latitude/longitude for the city.
+    """
+    weather_data = get_weather_by_prompt(prompt)
+    lat_lon_data = get_lat_lon(city_name)
+    
+    response_content = {
+        "plan": "Here is the information for your trip:",
+        "weather": weather_data
+    }
+    
+    if lat_lon_data:
+        response_content["location"] = lat_lon_data
+    else:
+        response_content["location"] = "Could not retrieve latitude and longitude for the given city."
 
-from getpass import getpass
-
-OPENWEATHERMAP_API_KEY = getpass()
-
-loader = WeatherDataLoader.from_params(
-    ["San Jose", "vellore"], openweathermap_api_key=OPENWEATHERMAP_API_KEY
-)
+    return response_content
 
 @app.get("/")
 async def read_root():
-    documents = loader.load()
-    return {"message": "Hello, FastAPI!", "weather": documents}
-
-@app.get("/items/{item_id}")
-async def read_item(item_id: int, q: str | None = None):
-    return {"item_id": item_id, "q": q}
-
-@app.post("/uploadfile/")
-async def create_upload_file(file: UploadFile):
-    return {"filename": file.filename, "content_type": file.content_type}
-
+    return {"message": "Welcome to the Weekend Planner Agent!"}
