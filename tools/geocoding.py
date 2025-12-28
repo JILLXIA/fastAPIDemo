@@ -1,34 +1,67 @@
+from typing import Optional
 import requests
+from pydantic import BaseModel, Field
+from langchain.tools import tool
 
-def get_lat_lon(city_name: str) -> dict | None:
+# =========================
+# Models
+# =========================
+
+class GeoInput(BaseModel):
+    city: str = Field(
+        ...,
+        description="City name with optional country, e.g., 'Huangshi, China' or 'San Jose CA'"
+    )
+
+class GeoResult(BaseModel):
+    lat: float = Field(..., description="Latitude in decimal degrees")
+    lon: float = Field(..., description="Longitude in decimal degrees")
+    display_name: str = Field(..., description="Resolved location name from OpenStreetMap")
+
+
+# =========================
+# LangChain Tool
+# =========================
+
+@tool(
+    "geocode_city_tool",
+    description="Resolve the latitude and longitude of a city using OpenStreetMap Nominatim. "
+                "Returns a dictionary containing 'lat', 'lon', and 'display_name'. "
+                "Useful for geocoding city names for weather, POI, or mapping purposes.",
+    args_schema=GeoInput
+)
+def geocode_city_tool(city: str) -> dict:
     """
-    Gets the latitude and longitude for a given city name using Nominatim OpenStreetMap API.
-
-    Args:
-        city_name: The name of the city (e.g., "Huangshi, China").
-
-    Returns:
-        A dictionary with 'lat' and 'lon' if successful, None otherwise.
+    Convert a city name into latitude and longitude using OpenStreetMap Nominatim.
+    Returns a dict with 'lat', 'lon', 'display_name', or empty dict if not found.
     """
-    url = f"https://nominatim.openstreetmap.org/search?q={city_name}&format=json&limit=1"
+    url = "https://nominatim.openstreetmap.org/search"
+    params = {
+        "q": city,
+        "format": "json",
+        "limit": 1,
+    }
     headers = {
-        "User-Agent": "weekend-planner-agent/1.0"
+        "User-Agent": "weekend-planner-agent/1.0",
+        "Accept-Language": "en",
     }
 
     try:
-        response = requests.get(url, headers=headers)
-        response.raise_for_status()  # Raise an exception for HTTP errors
+        response = requests.get(url, params=params, headers=headers, timeout=5)
+        response.raise_for_status()
         data = response.json()
+        if not data:
+            return {}
 
-        if data and len(data) > 0:
-            first_result = data[0]
-            return {
-                "lat": first_result.get("lat"),
-                "lon": first_result.get("lon")
-            }
-        else:
-            print(f"No results found for city: {city_name}")
-            return None
+        result = GeoResult(
+            lat=data[0]["lat"],
+            lon=data[0]["lon"],
+            display_name=data[0].get("display_name", ""),
+        )
+        return result.model_dump()
+
+    except requests.exceptions.Timeout:
+        return {}
     except requests.exceptions.RequestException as e:
-        print(f"Error fetching geocoding data for {city_name}: {e}")
-        return None
+        print(f"Geocoding failed for '{city}': {e}")
+        return {}

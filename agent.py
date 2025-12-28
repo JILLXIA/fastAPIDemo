@@ -1,23 +1,32 @@
 import os
-
 from dotenv import load_dotenv
 from langchain_classic.agents import create_tool_calling_agent, AgentExecutor
 
 # Import our tools
-from tools.weather import get_weather_by_prompt
+from tools.weather import get_weather_onecall
+from tools.geocoding import geocode_city_tool
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+
 # Load environment variables
 load_dotenv()
-
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
+
 def create_weekend_planner_agent():
+    """
+    Create a weekend planner agent that automatically chains:
+    1. geocode_city_tool → get coordinates
+    2. get_weather_by_prompt → fetch weather
+    """
+
+    # Tools in the agent
     tools = [
-        get_weather_by_prompt
+        geocode_city_tool,
+        get_weather_onecall
     ]
 
-    # create a simple tool-using agent
+    # LLM model
     model = ChatOpenAI(
         model="gpt-5-nano",
         temperature=0.1,
@@ -26,18 +35,28 @@ def create_weekend_planner_agent():
         api_key=OPENAI_API_KEY
     )
 
+    # Prompt template: guide the agent to chain tools
     prompt = ChatPromptTemplate.from_messages([
-        ("system", "You are a weekend planner."),
+        ("system",
+         "You are a helpful weekend planner agent. "
+         "You have access to two tools:\n"
+         "1. geocode_city_tool: resolves a city name into latitude and longitude.\n"
+         "2. get_weather_onecall: fetches weather for a given location (latitude and longitude) or coordinates.\n"
+         "Use geocode_city_tool first to get coordinates, then use get_weather_by_prompt to fetch weather."),
         ("human", "{input}"),
         MessagesPlaceholder("agent_scratchpad")
     ])
+
+    # Create agent
     agent = create_tool_calling_agent(model, tools=tools, prompt=prompt)
     executor = AgentExecutor(agent=agent, tools=tools, verbose=True)
 
-    # run the agent
-    result = executor.invoke({"input" : "Plan my Saturday in Seattle"})
+    # Example query: the agent automatically chains geocode → weather
+    user_query = "Plan my Saturday in Seattle"
+    result = executor.invoke({"input": user_query})
 
     print(result)
+
 
 if __name__ == "__main__":
     create_weekend_planner_agent()

@@ -1,42 +1,110 @@
 import os
 import requests
-from dotenv import load_dotenv
+from typing import List, Optional, Literal
 from langchain_core.tools import tool
+from pydantic import BaseModel, Field
+from datetime import datetime
 
-@tool
-def get_weather_by_prompt(prompt: str) -> dict:
+def kelvin_to_c(k: float) -> float:
+    return round(k - 273.15, 1)
+
+
+def kelvin_to_f(k: float) -> float:
+    return round((k - 273.15) * 9 / 5 + 32, 1)
+
+def convert_temp(temp_k: float | None, units: str) -> float | None:
+    if temp_k is None:
+        return None
+    return kelvin_to_c(temp_k) if units == "celsius" else kelvin_to_f(temp_k)
+
+def convert_unix_timestamp_to_human_readable(timestamp: int) -> str:
     """
-    Gets weather data for a given prompt using the OpenWeatherMap assistant API.
-
-    Args:
-        prompt: A string describing the weather request, 
-                e.g., "What’s weather like in San Jose, CA next weekend?"
-
-    Returns:
-        A dictionary containing the weather data.
+    Converts a Unix timestamp to a human-readable date string (YYYY-MM-DD HH:MM:SS).
     """
-    load_dotenv()
-    WEATHER_API_KEY = os.getenv("OPENWEATHERMAP_API_KEY")
-    # For local development, you can set the OPENWEATHERMAP_API_KEY environment variable.
-    # You can get a key from https://home.openweathermap.org/api_keys
-    # The user provided this key: 40ca2d6e6d33ca1556009a741586bb1a
-    api_key = os.environ.get("OPENWEATHERMAP_API_KEY", WEATHER_API_KEY)
+    return datetime.fromtimestamp(timestamp).strftime('%Y-%m-%d %H:%M:%S')
+
+class OneCallInput(BaseModel):
+    lat: float = Field(description="Latitude")
+    lon: float = Field(description="Longitude")
+    units: Literal["celsius", "fahrenheit"] = Field(
+        default="celsius",
+        description="Temperature unit for output"
+    )
+    days: int = Field(
+        default=7,
+        description="Number of daily forecasts to return (max 8)"
+    )
+
+
+@tool(
+    "get_weather_onecall",
+    description="Get current weather and daily forecast using OpenWeather One Call 3.0",
+    args_schema=OneCallInput
+)
+def get_weather_onecall(
+    lat: float,
+    lon: float,
+    units: str = "celsius",
+    days: int = 7
+) -> dict:
+    api_key = os.getenv("OPENWEATHERMAP_API_KEY")
     if not api_key:
-        raise ValueError("OPENWEATHERMAP_API_KEY not found in environment variables.")
+        return {"error": "OPENWEATHERMAP_API_KEY not configured"}
 
-    url = "https://api.openweathermap.org/assistant/session"
-    headers = {
-        "Content-Type": "application/json",
-        "X-Api-Key": api_key
-    }
-    data = {
-        "prompt": prompt
+    url = "https://api.openweathermap.org/data/3.0/onecall"
+
+    params = {
+        "lat": lat,
+        "lon": lon,
+        "appid": api_key,
+        "exclude": "minutely,hourly,alerts",
     }
 
     try:
-        response = requests.post(url, headers=headers, json=data)
-        response.raise_for_status()  # Raise an exception for bad status codes (4xx or 5xx)
-        response_data = response.json()
-        return response_data.get("answer", "No answer found.")
+        response = requests.get(url, params=params, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+
+        current = data.get("current", {})
+        daily = data.get("daily", [])[:days]
+
+        return {
+            "location": {
+                "lat": lat,
+                "lon": lon,
+                "timezone": data.get("timezone"),
+            },
+            "current": {
+                "temperature": convert_temp(current.get("temp"), units),
+                "feels_like": convert_temp(current.get("feels_like"), units),
+                "humidity": current.get("humidity"),
+                "uvi": current.get("uvi"),
+                "wind_speed": current.get("wind_speed"),
+                "condition": current.get("weather", [{}])[0].get("description"),
+            },
+            "daily_forecast": [
+                {
+                    "date": convert_unix_timestamp_to_human_readable(day.get("dt")),
+                    "summary": day.get("summary"),
+                    "temp_min": convert_temp(day.get("temp", {}).get("min"), units),
+                    "temp_max": convert_temp(day.get("temp", {}).get("max"), units),
+                    "humidity": day.get("humidity"),
+                    "uvi": day.get("uvi"),
+                    "wind_speed": day.get("wind_speed"),
+                    "rain_probability": day.get("pop"),
+                    "rain_amount": day.get("rain", 0),
+                    "condition": day.get("weather", [{}])[0].get("main"),
+                    "description": day.get("weather", [{}])[0].get("description"),
+                }
+                for day in daily
+            ],
+        }
+
+    except requests.exceptions.HTTPError:
+        return {
+            "error": "OpenWeather One Call API error",
+            "status": response.status_code,
+            "details": response.text,
+        }
     except requests.exceptions.RequestException as e:
         return {"error": str(e)}

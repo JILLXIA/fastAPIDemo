@@ -9,3 +9,4 @@ langchain
 langchain-openai
 langchain-classic
 langchain-core
+pydantic
