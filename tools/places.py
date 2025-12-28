@@ -1,194 +1,79 @@
 import requests
 from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, Field
+from langchain_core.tools import tool
 
-try:
-    from langchain.tools import StructuredTool
-    LANGCHAIN_AVAILABLE = True
-except ImportError:
-    LANGCHAIN_AVAILABLE = False
-    StructuredTool = None
+class PlaceInput(BaseModel):
+    lat: float = Field(..., description="Latitude of the center point")
+    lon: float = Field(..., description="Longitude of the center point")
+    radius: int = Field(25000, description="Search radius in meters")
+    amenity: str = Field(..., description="Type of amenity to search for (e.g., restaurant, cafe, bar, fast_food, cinema, parking, fuel, bank, pharmacy, hospital)")
+    cuisine: Optional[str] = Field(None, description="Cuisine type (e.g., chinese, italian, mexican, indian, japanese, burger, pizza). Only applicable for food-related amenities.")
+    limit: int = Field(10, description="Maximum number of results to return")
 
-OVERPASS_URL = "https://overpass-api.de/api/interpreter"
-
-def search_cuisine(
-    lat: float,
-    lon: float,
-    cuisine: str,
-    preferences: List[str] = None,
-    radius: int = 2000,
-) -> List[dict]:
+@tool("get_places_osm", args_schema=PlaceInput)
+def get_places_osm(lat: float, lon: float, amenity: str, radius: int = 25000, cuisine: Optional[str] = None, limit: int = 10) -> List[Dict[str, Any]]:
     """
-    Generic cuisine search using OSM + heuristics.
-    Returns a list of raw OSM elements.
+    Find places of interest using OpenStreetMap (Overpass API).
+
+    Common amenities:
+    - Sustenance: bar, bbq, biergarten, cafe, fast_food, food_court, ice_cream, pub, restaurant
+    - Entertainment: arts_centre, casino, cinema, community_centre, gambling, nightclub, planetarium, theatre
+    - Others: bank, atm, pharmacy, hospital, clinic, doctors, dentist, veterinary, police, post_office, library, university, school, kindergarten, place_of_worship, parking, fuel, taxi, bus_station, train_station
+
+    Common cuisines (for restaurants/fast_food):
+    - american, asian, bagel, bbq, breakfast, burger, cake, chicken, chinese, coffee_shop, donut, fish_and_chips, french, german, greek, ice_cream, indian, italian, japanese, kebab, korean, mexican, noodle, pizza, ramen, sandwich, seafood, spanish, steak_house, sushi, thai, turkish, vietnamese
     """
-    preferences = preferences or []
-    
-    # User-Agent is required by Overpass API policy
-    headers = {
-        "User-Agent": "weekend-planner-agent/1.0"
-    }
+    overpass_url = "https://overpass-api.de/api/interpreter"
 
-    cuisine_pattern = cuisine.lower() if cuisine else ""
+    # Construct the query
+    # Example: [out:json]; node ["amenity"="restaurant"] ["cuisine"~"chinese"] (around:25000,37.33,-121.89); out 10;
 
-    # Preference keywords → name-based matching
-    pref_keywords = {
-        "spicy": "spicy|sichuan|szechuan|chongqing|hot",
-        "hotpot": "hotpot|hot pot|火锅",
-        "noodles": "noodle|ramen|lamian|拉面",
-        "dumplings": "dumpling|jiaozi|包子|dim sum"
-    }
+    query_parts = ["[out:json];", "node"]
+    query_parts.append(f'["amenity"="{amenity}"]')
 
-    name_pattern = "|".join(
-        pref_keywords[p] for p in preferences if p in pref_keywords
-    )
-    
-    # Construct the query parts
-    # Part 1: Cuisine match (if cuisine provided)
-    query_part_cuisine = ""
-    if cuisine_pattern:
-        query_part_cuisine = f"""
-        node
-            ["amenity"~"restaurant|fast_food"]
-            ["cuisine"~"{cuisine_pattern}"]
-            (around:{radius},{lat},{lon});
-        """
-    
-    # Part 2: Name match (only if we have a pattern from preferences)
-    query_part_name = ""
-    if name_pattern:
-        query_part_name = f"""
-        node
-            ["amenity"~"restaurant|fast_food"]
-            ["name"~"{name_pattern}", i]
-            (around:{radius},{lat},{lon});
-        """
+    if cuisine:
+        # Using regex match ~ as per user example
+        query_parts.append(f'["cuisine"~"{cuisine}"]')
 
-    # If neither, just search for restaurants (fallback, though usually cuisine is provided)
-    if not query_part_cuisine and not query_part_name:
-        query_part_cuisine = f"""
-        node
-            ["amenity"~"restaurant|fast_food"]
-            (around:{radius},{lat},{lon});
-        """
+    query_parts.append(f'(around:{radius},{lat},{lon});')
+    query_parts.append(f'out {limit};')
 
-    query = f"""
-    [out:json];
-    (
-      {query_part_cuisine}
-      {query_part_name}
-    );
-    out tags;
-    """
+    query = " ".join(query_parts)
 
     try:
-        resp = requests.post(OVERPASS_URL, data=query, headers=headers)
-        resp.raise_for_status()
-        return resp.json().get("elements", [])
-    except requests.exceptions.RequestException as e:
-        print(f"Error searching cuisine: {e}")
-        return []
+        response = requests.post(overpass_url, data=query, headers={'Content-Type': 'text/plain'})
+        response.raise_for_status()
+        data = response.json()
 
-def score_place(tags: dict, preferences: List[str]) -> float:
-    score = 0.0
+        elements = data.get("elements", [])
+        results = []
+        for el in elements:
+            tags = el.get("tags", {})
 
-    name = tags.get("name", "").lower()
-    cuisine = tags.get("cuisine", "").lower()
+            # Format address
+            addr_parts = []
+            if tags.get('addr:housenumber'):
+                addr_parts.append(tags.get('addr:housenumber'))
+            if tags.get('addr:street'):
+                addr_parts.append(tags.get('addr:street'))
+            if tags.get('addr:city'):
+                addr_parts.append(tags.get('addr:city'))
 
-    # Base score if named (unnamed places are often lower quality)
-    if "name" in tags:
-        score += 1.0
+            address = " ".join(addr_parts) if addr_parts else "Address not available"
 
-    # Cuisine specificity
-    if ";" in cuisine or "," in cuisine:
-        score += 0.5
+            results.append({
+                "name": tags.get("name", "Unknown"),
+                "lat": el.get("lat"),
+                "lon": el.get("lon"),
+                "amenity": tags.get("amenity"),
+                "cuisine": tags.get("cuisine"),
+                "address": address,
+                "phone": tags.get("phone") or tags.get("contact:phone"),
+                "website": tags.get("website") or tags.get("contact:website"),
+                "opening_hours": tags.get("opening_hours")
+            })
+        return results
 
-    # Preference matching
-    keyword_map = {
-        "spicy": ["sichuan", "szechuan", "chongqing", "spicy"],
-        "hotpot": ["hotpot", "hot pot", "火锅"],
-        "noodles": ["noodle", "lamian", "ramen"],
-        "dumplings": ["dumpling", "jiaozi", "包子", "dim sum"]
-    }
-
-    for pref in preferences:
-        for kw in keyword_map.get(pref, []):
-            if kw in name or kw in cuisine:
-                score += 1.5
-
-    # Brand heuristic (often consistent quality)
-    brands = ["din tai fung", "haidilao"]
-    if any(b in name for b in brands):
-        score += 2.0
-
-    return score
-
-def find_best_restaurants(
-    latitude: float,
-    longitude: float,
-    cuisine: Optional[str] = "restaurant",
-    preferences: Optional[List[str]] = None,
-    radius: int = 2000
-) -> List[Dict[str, Any]]:
-    """
-    Finds and ranks restaurants based on cuisine and preferences.
-    Returns a list of dictionaries with restaurant details.
-    """
-    prefs = preferences or []
-    places = search_cuisine(latitude, longitude, cuisine, prefs, radius)
-
-    scored = []
-    for p in places:
-        tags = p.get("tags", {})
-        if not "name" in tags:
-            continue
-            
-        score = score_place(tags, prefs)
-        
-        # Extract useful info
-        place_info = {
-            "name": tags.get("name"),
-            "cuisine": tags.get("cuisine", "unknown"),
-            "score": score,
-            "address": f"{tags.get('addr:street', '')} {tags.get('addr:housenumber', '')}".strip(),
-            "opening_hours": tags.get("opening_hours"),
-            "website": tags.get("website") or tags.get("contact:website"),
-            "lat": p.get("lat"),
-            "lon": p.get("lon")
-        }
-        scored.append(place_info)
-
-    # Sort by score descending
-    scored.sort(key=lambda x: x["score"], reverse=True)
-    
-    # Deduplicate by name
-    seen = set()
-    top_results = []
-    for place in scored:
-        if place["name"] not in seen:
-            top_results.append(place)
-            seen.add(place["name"])
-        if len(top_results) >= 10:
-            break
-
-    return top_results
-
-# --- LangChain Integration ---
-
-class PlaceSearchInput(BaseModel):
-    latitude: float = Field(..., description="Latitude of the location")
-    longitude: float = Field(..., description="Longitude of the location")
-    cuisine: Optional[str] = Field("restaurant", description="Type of cuisine (e.g., 'chinese', 'italian', 'pizza')")
-    preferences: Optional[List[str]] = Field(default_factory=list, description="List of preferences (e.g., ['spicy', 'hotpot', 'cheap'])")
-    radius: Optional[int] = Field(2000, description="Search radius in meters")
-
-if LANGCHAIN_AVAILABLE and StructuredTool:
-    places_tool = StructuredTool.from_function(
-        func=find_best_restaurants,
-        name="find_restaurants",
-        description="Find nearby restaurants by cuisine and preferences. Returns a list of matches with details.",
-        args_schema=PlaceSearchInput
-    )
-else:
-    places_tool = None
-
+    except Exception as e:
+        return [{"error": str(e)}]
