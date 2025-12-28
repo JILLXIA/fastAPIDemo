@@ -1,8 +1,34 @@
 from fastapi import FastAPI
 from tools.weather import get_weather_by_prompt
 from tools.geocoding import get_lat_lon
+from tools.places import find_best_restaurants
+from typing import Optional
 
 app = FastAPI()
+
+@app.get("/restaurants")
+async def get_restaurants(
+    city_name: str = "San Jose, CA",
+    cuisine: str = "chinese",
+    preferences: Optional[str] = None
+):
+    """
+    Finds restaurants based on city, cuisine and preferences.
+    """
+    lat_lon_data = get_lat_lon(city_name)
+    if not lat_lon_data:
+        return {"error": "Could not find location for the given city."}
+    
+    prefs_list = [p.strip() for p in preferences.split(",")] if preferences else []
+    
+    result = find_best_restaurants(
+        lat_lon_data["lat"], 
+        lat_lon_data["lon"], 
+        cuisine, 
+        prefs_list
+    )
+    
+    return {"result": result}
 
 @app.get("/plan")
 async def get_plan(

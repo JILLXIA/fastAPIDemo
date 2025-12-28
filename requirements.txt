@@ -4,3 +4,8 @@ python-dotenv
 langchain-community
 openweathermap
 requests
+langchain
+
+langchain-openai
+langchain-classic
+langchain-core
