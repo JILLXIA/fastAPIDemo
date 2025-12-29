@@ -24,6 +24,25 @@ This repo exposes the LangChain weekend-planner agent as a FastAPI service.
 }
 ```
 
+## Logging
+
+The server logs include:
+
+- Request start/end with a `X-Request-ID` correlation id
+- Agent start/end timings
+- Tool calls (name + inputs; outputs are truncated by default)
+
+Controls:
+
+- `LOG_LEVEL` (default `INFO`). Use `DEBUG` for more verbose/truncated-less logs.
+- `verbose` (request field): if `true`, the API response includes `raw` (the full LangChain result). Tool-call logs are still written to server logs either way.
+
+Example (local):
+
+```bash
+LOG_LEVEL=DEBUG uvicorn main:app --reload
+```
+
 ## Environment variables
 
 Required for full functionality:
@@ -75,4 +94,3 @@ docker compose up --build
 python -m pip install -r requirements.txt -r requirements-dev.txt
 pytest -q
 ```
-

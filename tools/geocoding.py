@@ -1,5 +1,6 @@
 from typing import Optional
 import requests
+import logging
 from pydantic import BaseModel, Field
 from langchain.tools import tool
 
@@ -22,6 +23,8 @@ class GeoResult(BaseModel):
 # =========================
 # LangChain Tool
 # =========================
+
+logger = logging.getLogger(__name__)
 
 @tool(
     "geocode_city_tool",
@@ -62,6 +65,6 @@ def geocode_city_tool(city: str) -> dict:
 
     except requests.exceptions.Timeout:
         return {}
-    except requests.exceptions.RequestException as e:
-        print(f"Geocoding failed for '{city}': {e}")
+    except requests.exceptions.RequestException:
+        logger.exception("Geocoding failed for city=%r", city)
         return {}
