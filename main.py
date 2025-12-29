@@ -8,6 +8,7 @@ import uuid
 import logging
 
 from agent import run_weekend_planner
+from agent import UpstreamLLMTimeoutError
 from logging_utils import setup_logging, request_id_ctx
 
 setup_logging()
@@ -61,6 +62,12 @@ async def agent_plan(req: AgentRequest):
     except ValueError as e:
         logger.warning("agent validation error: %s", e)
         raise HTTPException(status_code=422, detail=str(e))
+    except UpstreamLLMTimeoutError:
+        logger.exception("agent upstream LLM timed out")
+        raise HTTPException(
+            status_code=504,
+            detail="Upstream LLM request timed out. Please retry.",
+        )
     except Exception:
         logger.exception("agent execution failed")
         raise HTTPException(status_code=500, detail="Agent execution failed")

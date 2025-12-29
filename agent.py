@@ -4,6 +4,10 @@ import logging
 import time
 from typing import Any, Optional
 import re
+import random
+
+import httpx
+import openai
 
 from dotenv import load_dotenv
 from langchain_classic.agents import create_tool_calling_agent, AgentExecutor
@@ -25,6 +29,23 @@ from logging_utils import sanitize_for_log
 load_dotenv()
 
 logger = logging.getLogger(__name__)
+
+
+class UpstreamLLMTimeoutError(TimeoutError):
+    """Raised when the upstream LLM call times out after retries."""
+
+
+def _is_timeout_exc(exc: BaseException) -> bool:
+    # OpenAI python SDK wraps timeouts as APITimeoutError; underlying httpx raises ReadTimeout.
+    return isinstance(
+        exc,
+        (
+            openai.APITimeoutError,
+            httpx.ReadTimeout,
+            httpx.TimeoutException,
+            TimeoutError,
+        ),
+    )
 
 
 class ToolLoggingCallbackHandler(BaseCallbackHandler):
@@ -148,7 +169,8 @@ def get_weekend_planner_executor(verbose: bool = False) -> AgentExecutor:
     openai_api_key = os.getenv("OPENAI_API_KEY")
 
     model_name = os.getenv("OPENAI_MODEL", "gpt-5-nano")
-    timeout_s = int(os.getenv("OPENAI_TIMEOUT_S", "30"))
+    # Render free tier + tool-calling can be slow; default to a more realistic timeout.
+    timeout_s = int(os.getenv("OPENAI_TIMEOUT_S", "120"))
     temperature = float(os.getenv("OPENAI_TEMPERATURE", "0.1"))
 
     tools = _build_tools()
@@ -167,7 +189,7 @@ def get_weekend_planner_executor(verbose: bool = False) -> AgentExecutor:
         temperature=temperature,
         max_tokens=None,
         timeout=timeout_s,
-        api_key=openai_api_key,
+        api_key=openai_api_key
     )
 
     agent = create_tool_calling_agent(model, tools=tools, prompt=prompt)
@@ -228,10 +250,41 @@ def run_weekend_planner(query: str, *, verbose: bool = False) -> dict:
         raise ValueError("query must be a non-empty string")
 
     executor = get_weekend_planner_executor(verbose=verbose)
+    retries = int(os.getenv("OPENAI_RETRIES", "2"))
+    backoff_s = float(os.getenv("OPENAI_RETRY_BACKOFF_S", "0.8"))
+    jitter_s = float(os.getenv("OPENAI_RETRY_JITTER_S", "0.3"))
+
     start = time.perf_counter()
-    result = executor.invoke({"input": query})
-    dur_ms = (time.perf_counter() - start) * 1000
-    logger.info("agent invoke complete duration_ms=%.2f", dur_ms)
+    last_exc: BaseException | None = None
+    for attempt in range(retries + 1):
+        try:
+            result = executor.invoke({"input": query})
+            dur_ms = (time.perf_counter() - start) * 1000
+            logger.info(
+                "agent invoke complete duration_ms=%.2f attempts=%s",
+                dur_ms,
+                attempt + 1,
+            )
+            break
+        except BaseException as e:
+            last_exc = e
+            if not _is_timeout_exc(e) or attempt >= retries:
+                raise
+            sleep_s = backoff_s * (2**attempt) + random.random() * jitter_s
+            logger.warning(
+                "upstream LLM timeout; retrying attempt=%s/%s sleep_s=%.2f error=%s",
+                attempt + 1,
+                retries + 1,
+                sleep_s,
+                type(e).__name__,
+            )
+            time.sleep(sleep_s)
+    else:  # pragma: no cover
+        raise UpstreamLLMTimeoutError("Upstream LLM request timed out") from last_exc
+
+    if last_exc is not None and _is_timeout_exc(last_exc):  # defensive
+        # This path shouldn't be reachable since we either succeed or re-raise.
+        raise UpstreamLLMTimeoutError("Upstream LLM request timed out") from last_exc
 
     # Safety net: enforce one-shot output.
     if isinstance(result, dict) and isinstance(result.get("output"), str):
