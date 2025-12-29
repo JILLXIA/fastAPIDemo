@@ -3,6 +3,7 @@ from functools import lru_cache
 import logging
 import time
 from typing import Any, Optional
+import re
 
 from dotenv import load_dotenv
 from langchain_classic.agents import create_tool_calling_agent, AgentExecutor
@@ -107,7 +108,21 @@ def _build_prompt() -> ChatPromptTemplate:
             "5. Find restaurants based on user's cuisine preference using get_places_osm.\n"
             "6. Search for recent events based on user's interest using discover_events. Ensure you include the event URL in the response.\n"
             "Finally, combine all information into a complete weekend plan. "
-            "IMPORTANT: Provide a single, comprehensive response. Do not ask the user for more information or follow-up questions. Make reasonable assumptions if needed to complete the plan.",
+            "IMPORTANT RULES:\n"
+            "- This is a ONE-SHOT interaction. Never ask the user any questions.\n"
+            "- Do NOT end your response with a question. Do NOT request preferences, confirmations, or follow-ups.\n"
+            "- If information is missing or ambiguous, pick reasonable defaults and proceed.\n"
+            "- If a tool returns no results or errors, provide a reasonable fallback suggestion without asking the user for more info.\n"
+            "DEFAULT ASSUMPTIONS (use when not specified):\n"
+            "- Dates: assume the upcoming Friday evening + Saturday + Sunday in the user's locale.\n"
+            "- Pace: balanced (some sightseeing + one movie + one event).\n"
+            "- Budget: mid-range.\n"
+            "- Travel radius: within ~0-40 km (or ~20 minutes by car/transit) of city center.\n"
+            "- Cuisine: broadly popular local options; if none, pick 5-6 varied choices (e.g., sushi, Italian, tacos).\n"
+            "- Movies: pick 3 currently popular options and suggest showtime-check guidance (without asking questions).\n"
+            "- Events: pick 3 relevant events with their URLs; if none, suggest common alternatives (live music venues, museums, parks).\n"
+            "OUTPUT FORMAT:\n"
+            "Return a single comprehensive plan with clear sections (Weather, Movies, Cinemas, Restaurants, Events, Suggested Itinerary).",
         ),
         ("human", "{input}"),
         MessagesPlaceholder("agent_scratchpad"),
@@ -160,6 +175,50 @@ def get_weekend_planner_executor(verbose: bool = False) -> AgentExecutor:
     return AgentExecutor(agent=agent, tools=tools, verbose=verbose, callbacks=callbacks)
 
 
+def _enforce_one_shot_output(text: str) -> str:
+    """Ensure the agent returns a one-shot response (no follow-up questions).
+
+    We do two things:
+    - Strip trailing question-only lines.
+    - If the last sentence is a question, replace it with a default-assumption line.
+
+    This is a safety net on top of the system prompt.
+    """
+    if not text:
+        return text
+
+    lines = [ln.rstrip() for ln in text.splitlines()]
+    # Drop empty tail
+    while lines and not lines[-1].strip():
+        lines.pop()
+
+    # Remove obvious follow-up question lines at the end.
+    while lines and lines[-1].strip().endswith("?"):
+        lines.pop()
+
+    out = "\n".join(lines).strip()
+    if not out:
+        return "Assumptions: I used reasonable defaults (balanced pace, mid-range budget, and nearby options) and provided a complete weekend plan in one message."
+
+    # If the output still contains a final question mark, replace the final question-y sentence.
+    if out.endswith("?"):
+        out = re.sub(
+            r"\?\s*$",
+            ".",
+            out,
+        )
+
+    # If any question remains anywhere, add an explicit note that assumptions were made.
+    if "?" in out:
+        out = out.replace("?", ".")
+        out += (
+            "\n\nAssumptions used: balanced pace, mid-range budget, within ~5–8 km of city center; "
+            "please check showtimes/reservation availability in your preferred apps."
+        )
+
+    return out
+
+
 def run_weekend_planner(query: str, *, verbose: bool = False) -> dict:
     """Run the weekend planner agent for a given user query.
 
@@ -173,6 +232,11 @@ def run_weekend_planner(query: str, *, verbose: bool = False) -> dict:
     result = executor.invoke({"input": query})
     dur_ms = (time.perf_counter() - start) * 1000
     logger.info("agent invoke complete duration_ms=%.2f", dur_ms)
+
+    # Safety net: enforce one-shot output.
+    if isinstance(result, dict) and isinstance(result.get("output"), str):
+        result["output"] = _enforce_one_shot_output(result["output"])
+
     return result
 
 
