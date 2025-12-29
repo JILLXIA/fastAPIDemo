@@ -1,58 +1,42 @@
-from fastapi import FastAPI
-from tools.weather import get_weather_by_prompt
-from tools.geocoding import get_lat_lon
-from tools.places import find_best_restaurants
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
+
 from typing import Optional
+
+from agent import run_weekend_planner
 
 app = FastAPI()
 
-@app.get("/restaurants")
-async def get_restaurants(
-    city_name: str = "San Jose, CA",
-    cuisine: str = "chinese",
-    preferences: Optional[str] = None
-):
-    """
-    Finds restaurants based on city, cuisine and preferences.
-    """
-    lat_lon_data = get_lat_lon(city_name)
-    if not lat_lon_data:
-        return {"error": "Could not find location for the given city."}
-    
-    prefs_list = [p.strip() for p in preferences.split(",")] if preferences else []
-    
-    result = find_best_restaurants(
-        lat_lon_data["lat"], 
-        lat_lon_data["lon"], 
-        cuisine, 
-        prefs_list
-    )
-    
-    return {"result": result}
 
-@app.get("/plan")
-async def get_plan(
-    prompt: str = "What’s weather like in San Jose, CA next weekend?",
-    city_name: str = "San Jose, CA"
-):
-    """
-    Creates a weekend plan.
-    It gets the weather for the given prompt and latitude/longitude for the city.
-    """
-    weather_data = get_weather_by_prompt(prompt)
-    lat_lon_data = get_lat_lon(city_name)
-    
-    response_content = {
-        "plan": "Here is the information for your trip:",
-        "weather": weather_data
-    }
-    
-    if lat_lon_data:
-        response_content["location"] = lat_lon_data
-    else:
-        response_content["location"] = "Could not retrieve latitude and longitude for the given city."
+class AgentRequest(BaseModel):
+    query: str = Field(..., min_length=1, description="User query for the weekend planner agent")
+    verbose: bool = Field(False, description="Return tool/agent logs on server side (debug)")
 
-    return response_content
+
+class AgentResponse(BaseModel):
+    output: str
+    raw: Optional[dict] = None
+
+
+@app.post("/agent", response_model=AgentResponse)
+async def agent_plan(req: AgentRequest):
+    """Run the weekend planner agent for a given user query."""
+    try:
+        # LangChain execution is blocking; run it in a threadpool.
+        result = await run_in_threadpool(run_weekend_planner, req.query, verbose=req.verbose)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Agent execution failed: {e}")
+
+    output = result.get("output") if isinstance(result, dict) else None
+    if not output:
+        raise HTTPException(status_code=500, detail="Agent returned an unexpected response shape")
+
+    # raw is useful for debugging; keep it off by default.
+    return AgentResponse(output=output, raw=result if req.verbose else None)
+
 
 @app.get("/")
 async def read_root():

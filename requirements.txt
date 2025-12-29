@@ -11,3 +11,5 @@ langchain-classic
 langchain-core
 pydantic
 pygeohash
+
+starlette
