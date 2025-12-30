@@ -1,5 +1,5 @@
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
+from fastapi import FastAPI, HTTPException, BackgroundTasks
+from pydantic import BaseModel, EmailStr, Field
 from starlette.concurrency import run_in_threadpool
 
 from typing import Optional
@@ -10,6 +10,7 @@ import logging
 from agent import run_weekend_planner
 from agent import UpstreamLLMTimeoutError
 from logging_utils import setup_logging, request_id_ctx
+from email_utils import send_email
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -64,6 +65,12 @@ class AgentResponse(BaseModel):
     raw: Optional[dict] = None
 
 
+class AgentEmailRequest(BaseModel):
+    query: str = Field(..., min_length=1, description="User query for the weekend planner agent")
+    email: EmailStr = Field(..., description="Email address to send the plan to")
+    verbose: bool = Field(False, description="Return tool/agent logs on server side (debug)")
+
+
 @app.post("/agent", response_model=AgentResponse)
 async def agent_plan(req: AgentRequest):
     """Run the weekend planner agent for a given user query."""
@@ -94,6 +101,42 @@ async def agent_plan(req: AgentRequest):
 
     # raw is useful for debugging; keep it off by default.
     return AgentResponse(output=output, raw=result if req.verbose else None)
+
+
+@app.post("/agent/email")
+async def agent_plan_email(req: AgentEmailRequest, background_tasks: BackgroundTasks):
+    """
+    Run the weekend planner agent and email the results.
+    We return immediately and process in the background if preferred, 
+    but typically the user waits for the plan generation confirmation.
+    Here we wait for generation, then send email in background to avoid latency on the email call.
+    """
+    # 1. Generate Plan
+    try:
+        logger.info("agent-email start verbose=%s query_len=%s", req.verbose, len(req.query or ""))
+        result = await run_in_threadpool(run_weekend_planner, req.query, verbose=req.verbose)
+    except ValueError as e:
+        logger.warning("agent validation error: %s", e)
+        raise HTTPException(status_code=422, detail=str(e))
+    except UpstreamLLMTimeoutError:
+        logger.exception("agent upstream LLM timed out")
+        raise HTTPException(status_code=504, detail="Upstream LLM request timed out")
+    except Exception:
+        logger.exception("agent execution failed")
+        raise HTTPException(status_code=500, detail="Agent execution failed")
+
+    output = result.get("output") if isinstance(result, dict) else None
+    if not output:
+        raise HTTPException(status_code=500, detail="Agent returned an unexpected response shape")
+
+    # 2. Format Email Content
+    # We pass the raw markdown output to send_email, which will handle conversion and styling.
+    
+    # 3. Send Email (in background to return faster)
+    background_tasks.add_task(send_email, to_email=str(req.email), subject="Your Weekend Plan", markdown_content=output)
+
+    return {"status": "success", "message": "Plan generated and email queued."}
+
 
 
 @app.get("/")

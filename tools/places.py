@@ -1,14 +1,19 @@
 import requests
+import time
+import random
+import logging
 from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, Field
 from langchain_core.tools import tool
+
+logger = logging.getLogger(__name__)
 
 class PlaceInput(BaseModel):
     lat: float = Field(..., description="Latitude of the center point")
     lon: float = Field(..., description="Longitude of the center point")
     radius: int = Field(25000, description="Search radius in meters")
     amenity: str = Field(..., description="Type of amenity to search for (e.g., restaurant, cafe, bar, fast_food, cinema, parking, fuel, bank, pharmacy, hospital)")
-    cuisine: Optional[str] = Field(None, description="Cuisine type (e.g., chinese, italian, mexican, indian, japanese, burger, pizza). Only applicable for food-related amenities.")
+    cuisine: Optional[str] = Field(None, description="Cuisine type (e.g., chinese, italian, mexican, indian, japanese, burger, pizza). For multiple cuisines, connect them with a pipe '|' (e.g., 'italian|chinese'). Only applicable for food-related amenities.")
     limit: int = Field(10, description="Maximum number of results to return")
 
 @tool("get_places_osm", args_schema=PlaceInput)
@@ -41,39 +46,57 @@ def get_places_osm(lat: float, lon: float, amenity: str, radius: int = 25000, cu
 
     query = " ".join(query_parts)
 
-    try:
-        response = requests.post(overpass_url, data=query, headers={'Content-Type': 'text/plain'})
-        response.raise_for_status()
-        data = response.json()
+    max_retries = 3
+    backoff_factor = 2
 
-        elements = data.get("elements", [])
-        results = []
-        for el in elements:
-            tags = el.get("tags", {})
+    for attempt in range(max_retries):
+        try:
+            response = requests.post(
+                overpass_url, 
+                data=query, 
+                headers={'Content-Type': 'text/plain'},
+                timeout=10 # Increased timeout
+            )
+            response.raise_for_status()
+            data = response.json()
 
-            # Format address
-            addr_parts = []
-            if tags.get('addr:housenumber'):
-                addr_parts.append(tags.get('addr:housenumber'))
-            if tags.get('addr:street'):
-                addr_parts.append(tags.get('addr:street'))
-            if tags.get('addr:city'):
-                addr_parts.append(tags.get('addr:city'))
+            elements = data.get("elements", [])
+            results = []
+            for el in elements:
+                tags = el.get("tags", {})
 
-            address = " ".join(addr_parts) if addr_parts else "Address not available"
+                # Format address
+                addr_parts = []
+                if tags.get('addr:housenumber'):
+                    addr_parts.append(tags.get('addr:housenumber'))
+                if tags.get('addr:street'):
+                    addr_parts.append(tags.get('addr:street'))
+                if tags.get('addr:city'):
+                    addr_parts.append(tags.get('addr:city'))
 
-            results.append({
-                "name": tags.get("name", "Unknown"),
-                "lat": el.get("lat"),
-                "lon": el.get("lon"),
-                "amenity": tags.get("amenity"),
-                "cuisine": tags.get("cuisine"),
-                "address": address,
-                "phone": tags.get("phone") or tags.get("contact:phone"),
-                "website": tags.get("website") or tags.get("contact:website"),
-                "opening_hours": tags.get("opening_hours")
-            })
-        return results
+                address = " ".join(addr_parts) if addr_parts else "Address not available"
 
-    except Exception as e:
-        return [{"error": str(e)}]
+                results.append({
+                    "name": tags.get("name", "Unknown"),
+                    "lat": el.get("lat"),
+                    "lon": el.get("lon"),
+                    "amenity": tags.get("amenity"),
+                    "cuisine": tags.get("cuisine"),
+                    "address": address,
+                    "phone": tags.get("phone") or tags.get("contact:phone"),
+                    "website": tags.get("website") or tags.get("contact:website"),
+                    "opening_hours": tags.get("opening_hours")
+                })
+            return results
+
+        except requests.exceptions.RequestException as e:
+            logger.warning(f"Overpass API attempt {attempt + 1}/{max_retries} failed: {e}")
+            if attempt < max_retries - 1:
+                sleep_time = backoff_factor ** attempt + random.uniform(0, 1)
+                time.sleep(sleep_time)
+            else:
+                return [{"error": f"Max retries exceeded. Last error: {str(e)}"}]
+        except Exception as e:
+             return [{"error": str(e)}]
+    
+    return []

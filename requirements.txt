@@ -16,3 +16,6 @@ starlette
 contextvars
 openai
 httpx
+markdown
+
+email-validator

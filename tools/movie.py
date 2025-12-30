@@ -92,7 +92,7 @@ def discover_movies(
             if g_clean in GENRE_MAP:
                 genre_ids.append(str(GENRE_MAP[g_clean]))
         if genre_ids:
-            params["with_genres"] = ",".join(genre_ids)
+            params["with_genres"] = "|".join(genre_ids)
 
     if vote_average_gte is not None:
         params["vote_average.gte"] = str(vote_average_gte)
