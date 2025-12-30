@@ -16,6 +16,21 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
+from fastapi.middleware.cors import CORSMiddleware
+
+# Configure CORS middleware
+origins = [
+    "*"  # Allow all origins for development. Restrict this in production.
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 
 @app.middleware("http")
 async def add_request_logging(request, call_next):

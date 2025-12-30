@@ -1,54 +1,83 @@
 # GEMINI.md - Weekend Planner Agent
 
-This document outlines the plan for building a Weekend Planner Agent.
+This document outlines the plan and current status for building a Weekend Planner Agent.
 
 ## 1. Project Goal
 
-The goal is to create an AI agent that helps users plan their weekend activities. The agent will take user preferences as input and generate a personalized weekend itinerary.
+The goal is to create an AI agent that helps users plan their weekend activities. The agent takes user preferences as input and generates a personalized weekend itinerary, leveraging external tools for real-time data.
 
 ## 2. Features
 
-- **User Preference Input:** Allow users to specify their location, interests, budget, and companions.
-- **Activity Suggestions:** Suggest activities, restaurants, and events based on user preferences.
-- **Itinerary Generation:** Create a structured weekend plan with a schedule.
-- **External Tool Integration:** Use external APIs to gather real-time information about places, weather, and events.
+- **User Preference Input:** Natural language interface for users to specify location, interests, and constraints.
+- **Activity Suggestions:** Suggests restaurants, cafes, and attractions using OpenStreetMap data.
+- **Event Discovery:** Finds local events (concerts, sports, arts) using the Ticketmaster API.
+- **Movie Recommendations:** Suggests currently playing or popular movies using the TMDB API.
+- **Weather Forecast:** Checks weather conditions using OpenWeatherMap to ensure suitable activities.
+- **Itinerary Generation:** Orchestrates all data into a cohesive, readable weekend plan.
 
-## 3. Proposed Tech Stack
+## 3. Tech Stack
 
-- **Language:** Python
-- **Core LLM:** Gemini
-- **Framework:** FastAPI (for a potential web API)
+- **Language:** Python 3.11+
+- **Core LLM:** OpenAI (GPT-4o / GPT-5-nano) via LangChain
+- **Framework:** FastAPI (Web API)
+- **Containerization:** Docker & Docker Compose
 - **External APIs:**
-    - Google Places API (for location-based suggestions)
-    - OpenWeatherMap API (for weather forecasts)
-    - A suitable event API (e.g., Ticketmaster, Eventbrite)
+    - **OpenWeatherMap:** Weather forecasts.
+    - **OpenStreetMap (Overpass API):** Location-based suggestions (Restaurants, Amenities).
+    - **Ticketmaster:** Event discovery.
+    - **TMDB (The Movie Database):** Movie discovery.
 
-## 4. Development Plan
+## 4. Development Status
 
-### Phase 1: Core Agent & Project Setup
+### Phase 1: Core Agent & Project Setup (✅ Completed)
+- **Task 1.1: Project Scaffolding:** Set up Python project, `requirements.txt`, and directory structure.
+- **Task 1.2: Basic Agent Logic:** Implemented LangChain agent with tool calling capabilities in `agent.py`.
+- **Task 1.3: API Server:** set up `main.py` with FastAPI to expose the agent via HTTP endpoints.
 
-- **Task 1.1: Project Scaffolding:** Set up a new Python project with a virtual environment. Create `main.py`, `requirements.txt`, and a `tools` directory.
-- **Task 1.2: Basic Agent Logic:** Implement a basic agent loop in `main.py`. This will take a hardcoded user prompt and use the Gemini LLM to generate a simple weekend plan.
-- **Task 1.3: User Input:** Implement a way to get user input, either through the command line or a simple web form.
+### Phase 2: Tool Integration (✅ Completed)
+- **Task 2.1: Weather Tool:** Implemented `tools/weather.py`.
+- **Task 2.2: Places Tool:** Implemented `tools/places.py` using OpenStreetMap (replaced Google Places).
+- **Task 2.3: Events Tool:** Implemented `tools/events.py` using Ticketmaster.
+- **Task 2.4: Movie Tool:** Implemented `tools/movie.py` using TMDB (New addition).
+- **Task 2.5: Geocoding Tool:** Implemented `tools/geocoding.py` to resolve city names to coordinates.
 
-### Phase 2: Tool Integration
+### Phase 3: Itinerary Generation & Output (✅ Completed)
+- **Task 3.1: Structured Output:** Agent prompt (`agent.py`) configured to return structured plans (Weather, Movies, Dining, Events).
+- **Task 3.2: Robustness:** Added safety nets for "one-shot" responses and error handling.
+- **Task 3.3: Logging:** Implemented comprehensive logging (`logging_utils.py`) for requests and tool usage.
 
-- **Task 2.1: Weather Tool:** Create a tool that uses the OpenWeatherMap API to get the weather forecast for a given location and date.
-- **Task 2.2: Places Tool:** Create a tool that uses the Google Places API to find restaurants, attractions, etc., based on user interests and location.
-- **Task 2.3: Events Tool:** Create a tool to find local events.
-- **Task 2.4: Integrate Tools with Agent:** Modify the agent to be able to use these tools to gather information and generate a more informed plan. The LLM will decide which tool to use.
+### Phase 4: Web Interface (🚧 In Progress)
+- **Task 4.1: FastAPI Setup:** Expose agent as a web service. (✅ Completed)
+- **Task 4.2: Frontend:** Build a simple frontend (HTML/CSS/JS) to interact with the agent. (TODO)
 
-### Phase 3: Itinerary Generation & Output
-
-- **Task 3.1: Structured Output:** Define a Pydantic model for a structured itinerary (e.g., with Day, Time, Activity, Location).
-- **Task 3.2: Output Formatting:** Instruct the LLM to generate the plan in the defined structured format.
-- **Task 3.3: User-Friendly Display:** Display the generated itinerary to the user in a clean and readable format.
-
-### Phase 4: Web Interface (Optional)
-
-- **Task 4.1: FastAPI Setup:** Create a FastAPI application to expose the agent as a web service.
-- **Task 4.2: Frontend:** Build a simple frontend (e.g., using HTML, CSS, and JavaScript) to interact with the agent.
+### Phase 5: Infrastructure & Quality (✅ Completed)
+- **Task 5.1: Docker:** Created `Dockerfile` and `docker-compose.yml` for easy deployment.
+- **Task 5.2: Testing:** Added unit tests (`test_main.py`, `test_event_tool.py`).
 
 ## 5. Getting Started
 
-To begin, we will create the `GEMINI.md` file with this plan. Then we will proceed with Phase 1.
+### Prerequisites
+- Python 3.11+ or Docker
+- API Keys for: OpenAI, OpenWeatherMap, Ticketmaster, TMDB.
+
+### Running Locally
+1. Install dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
+2. Set up environment variables in `.env` (see `.env.example` if available).
+3. Run the server:
+   ```bash
+   uvicorn main:app --reload
+   ```
+
+### Running with Docker
+1. Build and run:
+   ```bash
+   docker-compose up --build
+   ```
+
+## 6. Future Improvements
+- Implement a React/Streamlit frontend.
+- Add user session history.
+- Improve error handling for specific API quotas.
